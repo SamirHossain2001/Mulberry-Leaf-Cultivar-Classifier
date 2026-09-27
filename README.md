@@ -4,9 +4,9 @@ nse <div align="center">
 
 **Identify 10 mulberry cultivars from a single leaf photo, and see _why_ the model decided, with Grad-CAM and LIME.**
 
-[![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.8-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.48-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://mulberry-leaf-cultivar-classifier-10.streamlit.app/)
 [![XAI](https://img.shields.io/badge/XAI-Grad--CAM%20%7C%20LIME-8A2BE2)](https://github.com/jacobgil/pytorch-grad-cam)
 [![Best accuracy](https://img.shields.io/badge/best%20accuracy-99.20%25-brightgreen)](#-results)
 [![Kaggle](https://img.shields.io/badge/Kaggle-notebooks-20BEFF?logo=kaggle&logoColor=white)](https://www.kaggle.com/samirhossain2001/code)
@@ -16,7 +16,7 @@ nse <div align="center">
 
 A Streamlit web app and training notebooks for classifying mulberry leaf cultivars with four CNNs: a custom 5-layer CNN plus fine-tuned ResNet-50, EfficientNet-B2 and VGG16. Upload a leaf image, pick a model, and get the top-3 predictions alongside five explainability visualizations.
 
-<!-- TODO: add the live Streamlit URL here after deploying, e.g. **[Live demo →](https://your-app.streamlit.app)** -->
+**🚀 [Try the live demo →](https://mulberry-leaf-cultivar-classifier-10.streamlit.app/)**
 
 ## ✨ Features
 
@@ -92,7 +92,7 @@ git clone https://github.com/SamirHossain2001/CSE366_Group_A_Streamlit_App.git
 cd CSE366_Group_A_Streamlit_App
 ```
 
-**2. Create and activate a virtual environment** (Python 3.11+)
+**2. Create and activate a virtual environment** (Python 3.11 or 3.12)
 
 ```bash
 python -m venv venv
