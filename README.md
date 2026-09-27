@@ -1,4 +1,4 @@
-nse <div align="center">
+<div align="center">
 
 # 🌿 Mulberry Leaf Cultivar Classifier
 
