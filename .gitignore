@@ -1,0 +1,29 @@
+# Notebook outputs (executed copies with large embedded plots)
+op/
+
+# Local-only notes
+suggestion.txt
+README.old.md
+
+# Model weights (download separately — see README)
+*.pth
+pth files.zip
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

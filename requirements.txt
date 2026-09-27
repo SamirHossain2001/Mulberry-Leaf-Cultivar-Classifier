@@ -1,0 +1,12 @@
+# CPU-only PyTorch wheels (Streamlit Community Cloud has no GPU; avoids multi-GB CUDA downloads)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.8.0+cpu
+torchvision==0.23.0+cpu
+
+streamlit==1.48.1
+grad-cam==1.5.5
+lime==0.2.0.1
+scikit-image==0.25.2
+numpy==2.2.6
+pillow==11.3.0
+huggingface_hub==2.0.0
