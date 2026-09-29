@@ -5,6 +5,7 @@ from torchvision import transforms, models
 from PIL import Image
 import numpy as np
 import zipfile
+import gc
 import io
 import os
 from huggingface_hub import hf_hub_download
@@ -13,7 +14,6 @@ from pytorch_grad_cam.utils.image import show_cam_on_image
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from lime import lime_image
 from skimage.segmentation import mark_boundaries
-from torch.cuda.amp import autocast
 
 # Define CLASS_NAMES globally
 # Order must match torchvision ImageFolder's sorted folder order used in training ("01 ..." to "10 ...")
@@ -86,9 +86,9 @@ class CustomCNN(nn.Module):
         self.dropout = nn.Dropout(0.1)
 
     def _get_conv_output_size(self):
-        with autocast():
+        with torch.no_grad():
             o = self.convs(torch.randn(1, 3, 224, 224))
-            return int(np.prod(o.size()[1:]))
+        return int(np.prod(o.size()[1:]))
 
     def forward(self, x):
         x = self.convs(x)
@@ -112,7 +112,7 @@ def load_custom_cnn(path, num_classes, device):
     return model
 
 def load_resnet50(path, num_classes, device):
-    model = models.resnet50(pretrained=False)
+    model = models.resnet50(weights=None)
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     try:
         state_dict = torch.load(path, map_location=device, weights_only=True)
@@ -124,7 +124,7 @@ def load_resnet50(path, num_classes, device):
     return model
 
 def load_efficientnet_b2(path, num_classes, device):
-    model = models.efficientnet_b2(pretrained=False)
+    model = models.efficientnet_b2(weights=None)
     model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
     try:
         state_dict = torch.load(path, map_location=device, weights_only=True)
@@ -136,7 +136,7 @@ def load_efficientnet_b2(path, num_classes, device):
     return model
 
 def load_vgg16(path, num_classes, device):
-    model = models.vgg16(pretrained=False)
+    model = models.vgg16(weights=None)
     model.classifier[6] = nn.Linear(model.classifier[6].in_features, num_classes)
     try:
         state_dict = torch.load(path, map_location=device, weights_only=True)
@@ -151,21 +151,20 @@ def load_vgg16(path, num_classes, device):
 def get_model_architecture(model):
     return str(model)
 
+CAM_METHODS = {
+    "GradCAM": GradCAM,
+    "GradCAMpp": GradCAMpp,
+    "EigenCAM": EigenCAM,
+    "AblationCAM": AblationCAM,
+}
+
 # Function to generate CAM heatmaps
 def generate_cam(model, tensor, target_class, method, target_layers):
-    if method == 'GradCAM':
-        cam_extractor = GradCAM(model=model, target_layers=target_layers)
-    elif method == 'GradCAMpp':
-        cam_extractor = GradCAMpp(model=model, target_layers=target_layers)
-    elif method == 'EigenCAM':
-        cam_extractor = EigenCAM(model=model, target_layers=target_layers)
-    elif method == 'AblationCAM':
-        cam_extractor = AblationCAM(model=model, target_layers=target_layers)
-    else:
-        raise ValueError("Invalid CAM method")
-    
-    targets = [ClassifierOutputTarget(target_class)]
-    grayscale_cam = cam_extractor(input_tensor=tensor, targets=targets)
+    # Smaller Ablation-CAM batches keep peak memory down on CPU
+    kwargs = {"batch_size": 16} if method == "AblationCAM" else {}
+    # `with` removes the CAM's hooks from the model even if the run is interrupted
+    with CAM_METHODS[method](model=model, target_layers=target_layers, **kwargs) as cam_extractor:
+        grayscale_cam = cam_extractor(input_tensor=tensor, targets=[ClassifierOutputTarget(target_class)])
     return grayscale_cam[0]
 
 # Function to overlay heatmap on image
@@ -186,10 +185,45 @@ def lime_explain(model, img_array, num_samples=100):
             return torch.softmax(model(transformed_images), dim=1).cpu().numpy()
     
     img_array = np.array(Image.fromarray(img_array).resize((224, 224)))
-    explanation = explainer.explain_instance(img_array, predict_fn, top_labels=1, hide_color=0, num_samples=num_samples)
+    explanation = explainer.explain_instance(img_array, predict_fn, top_labels=1, hide_color=0, num_samples=num_samples, random_seed=42)
     temp, mask = explanation.get_image_and_mask(explanation.top_labels[0], positive_only=True, num_features=5, hide_rest=False)
     lime_img = mark_boundaries(temp / 255.0, mask, color=(1, 1, 1))
     return Image.fromarray((lime_img * 255).astype(np.uint8))
+
+NUM_CLASSES = len(CLASS_NAMES)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+])
+
+def target_layers_for(model_name, model):
+    if model_name == "Custom CNN":
+        return [model.convs[16]]  # Last Conv2d layer in convs
+    if model_name == "ResNet-50":
+        return [model.layer4[-1]]  # Last layer in ResNet-50's layer4
+    if model_name == "EfficientNet-B2":
+        return [model.features[-1]]  # Last conv layer in EfficientNet-B2
+    return [model.features[-3]]  # VGG16: last conv layer (before maxpool)
+
+# The heavy work runs in cached functions with no st.* calls inside: a widget change
+# can't stop them halfway, and switching back to a model/image already seen is instant.
+@st.cache_data(max_entries=8, show_spinner=False)
+def predict(model_name, image_bytes, _model):
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    with torch.no_grad():
+        logits = _model(transform(img).unsqueeze(0).to(DEVICE))
+    return torch.softmax(logits, dim=1).cpu().numpy()[0]
+
+@st.cache_data(max_entries=8, show_spinner=False)
+def explain(model_name, image_bytes, target_class, _model):
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    tensor = transform(img).unsqueeze(0).to(DEVICE)
+    layers = target_layers_for(model_name, _model)
+    cams = {m: overlay_heatmap(img, generate_cam(_model, tensor, target_class, m, layers)) for m in CAM_METHODS}
+    return cams, lime_explain(_model, np.array(img))
 
 # Streamlit app
 st.set_page_config(page_title="Mulberry Leaf Classifier", layout="wide", initial_sidebar_state="expanded")
@@ -204,8 +238,6 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Upload a Leaf Image", type=["jpg", "jpeg", "png"])
     st.markdown("---")
     st.subheader("Model Metadata")
-    NUM_CLASSES = len(CLASS_NAMES)
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     INPUT_SIZE = "224x224"
     if model_choice == "Custom CNN":
         CHECKPOINT_PATH = "custom_cnn_model.pth"
@@ -233,36 +265,20 @@ def load_model(name, checkpoint_path):
     return MODEL_LOADERS[name](get_checkpoint(checkpoint_path), NUM_CLASSES, DEVICE)
 
 model = load_model(model_choice, CHECKPOINT_PATH)
-
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-])
+if st.session_state.get("loaded_model") != model_choice:
+    st.session_state.loaded_model = model_choice
+    gc.collect()  # the previous model was evicted from the cache; release its memory now
 
 if uploaded_file:
     # 1. Load & show original image
-    img = Image.open(uploaded_file).convert("RGB")
-    img_array = np.array(img)  # For LIME
+    image_bytes = uploaded_file.getvalue()
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     st.image(img, caption="Input Image", width=400)
-    
-    # 2. Preprocess
-    tensor = transform(img).unsqueeze(0).to(DEVICE)
-    
-    # 3. Inference with spinner
-    if model_choice == "Custom CNN":
-        target_layers = [model.convs[16]]  # Last Conv2d layer in convs
-    elif model_choice == "ResNet-50":
-        target_layers = [model.layer4[-1]]  # Last layer in ResNet-50's layer4
-    elif model_choice == "EfficientNet-B2":
-        target_layers = [model.features[-1]]  # Last conv layer in EfficientNet-B2
-    else:  # VGG16
-        target_layers = [model.features[-3]]  # Last conv layer in VGG16 (before maxpool)
+
+    # 2-3. Inference
     with st.spinner("Performing model inference..."):
-        with torch.no_grad():
-            logits = model(tensor)
-            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
-    
+        probs = predict(model_choice, image_bytes, model)
+
     # 4. Predictions
     top_idxs = np.argsort(probs)[::-1][:3]
     predicted_class = CLASS_NAMES[top_idxs[0]]
@@ -271,37 +287,28 @@ if uploaded_file:
     st.markdown("**Top-3 Classes:**")
     for idx in top_idxs:
         st.write(f"{CLASS_NAMES[idx]}: {probs[idx]*100:.2f}%")
-    
+
     # 5. Model Architecture Details
     with st.expander("View Model Architecture"):
         st.text(get_model_architecture(model))
-    
-    # 6. Explainability Visualizations with spinner
+
+    # 6. Explainability Visualizations
     st.subheader("Explainability Visualizations")
     st.markdown("Heatmaps overlaid on the original image for interpretability.")
-    
-    target_class = top_idxs[0]  # Use top predicted class for CAMs
-    
-    methods = ['GradCAM', 'GradCAMpp', 'EigenCAM', 'AblationCAM']
-    vis_images = {}
-    
-    # Row 1: CAM Methods with spinner
-    with st.spinner("Generating CAM visualizations..."):
-        cols = st.columns(4)  # Four columns for CAM methods
-        for i, method in enumerate(methods):
-            with cols[i]:
-                heatmap = generate_cam(model, tensor, target_class, method, target_layers)
-                overlaid = overlay_heatmap(img, heatmap)
-                st.image(overlaid, caption=method, use_container_width=True)
-                vis_images[method] = overlaid
-    
-    # Row 2: LIME with spinner
-    st.markdown("---")  # Separator between rows
-    with st.spinner("Generating LIME explanation..."):
-        lime_img = lime_explain(model, img_array)
-        st.image(lime_img, caption="LIME", width=400)
-        vis_images['LIME'] = lime_img
-    
+    try:
+        with st.spinner("Generating CAM and LIME explanations (Ablation-CAM and LIME are slow on CPU)..."):
+            cams, lime_img = explain(model_choice, image_bytes, int(top_idxs[0]), model)
+    except Exception as e:
+        st.error(f"Couldn't build the explanations for this image: {e}")
+        st.stop()
+
+    cols = st.columns(len(cams))
+    for col, (method, overlaid) in zip(cols, cams.items()):
+        col.image(overlaid, caption=method, use_container_width=True)
+    st.markdown("---")
+    st.image(lime_img, caption="LIME", width=400)
+    vis_images = {**cams, "LIME": lime_img}
+
     # 7. Download option
     st.subheader("Download Visualizations")
     zip_buffer = io.BytesIO()
