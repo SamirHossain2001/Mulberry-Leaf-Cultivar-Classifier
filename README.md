@@ -18,6 +18,8 @@ A Streamlit web app and training notebooks for classifying mulberry leaf cultiva
 
 **🚀 [Try the live demo →](https://mulberry-leaf-cultivar-classifier-10.streamlit.app/)**
 
+![The app: top-3 prediction and Grad-CAM, Grad-CAM++, Eigen-CAM and Ablation-CAM heatmaps](assets/screenshot.png)
+
 ## ✨ Features
 
 - **Four models, one UI.** Switch between CustomCNN, ResNet-50, EfficientNet-B2 and VGG16 from the sidebar.
